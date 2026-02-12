@@ -1,17 +1,42 @@
-from telegram.ext import ApplicationBuilder, MessageHandler, filters
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
+
+from fastapi import FastAPI, Request
+from telegram import Update
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    MessageHandler,
+    CommandHandler,
+    ContextTypes,
+    filters,
+)
 
 from commands.start import start_handler
 from commands.task import task_handler, toggle_handler
-from llm_wrapper  import chat
+from llm_wrapper import chat
 
 load_dotenv()
-BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-from telegram import Update
-from telegram.ext import ContextTypes
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://yourdomain.com
+
+# ------------------------
+# FASTAPI APP
+# ------------------------
+
+app = FastAPI()
+
+# ------------------------
+# TELEGRAM APPLICATION
+# ------------------------
+
+telegram_app: Application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+
+# ------------------------
+# TELEGRAM HANDLERS
+# ------------------------
 
 async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text
@@ -19,22 +44,50 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
 
 
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(start_handler)
-    app.add_handler(task_handler)
-    app.add_handler(toggle_handler)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
-
-    print("Running in webhook mode...")
-
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=8000,
-        webhook_url=WEBHOOK_URL,
-    )
+telegram_app.add_handler(start_handler)
+telegram_app.add_handler(task_handler)
+telegram_app.add_handler(toggle_handler)
+telegram_app.add_handler(
+    MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler)
+)
 
 
-if __name__ == "__main__":
-    main()
+# ------------------------
+# HEALTH ENDPOINT (FOR CRON)
+# ------------------------
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+# ------------------------
+# TELEGRAM WEBHOOK ENDPOINT
+# ------------------------
+
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
+    return {"ok": True}
+
+
+# ------------------------
+# STARTUP EVENT
+# ------------------------
+
+@app.on_event("startup")
+async def on_startup():
+    await telegram_app.initialize()
+    await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+    print("Webhook set successfully")
+
+
+# ------------------------
+# SHUTDOWN EVENT
+# ------------------------
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await telegram_app.shutdown()
