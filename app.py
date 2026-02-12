@@ -8,6 +8,7 @@ from llm_wrapper  import chat
 
 load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -24,12 +25,16 @@ def main():
     app.add_handler(start_handler)
     app.add_handler(task_handler)
     app.add_handler(toggle_handler)
-
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_handler))
 
-    print("Bot is running...")
+    print("Running in webhook mode...")
 
-    app.run_polling()
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=8000,
+        webhook_url=WEBHOOK_URL,
+    )
+
 
 if __name__ == "__main__":
     main()
